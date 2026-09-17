@@ -8,18 +8,24 @@
  * is a structural limit, not a tuning problem — offline renderers get their look
  * by tracing real internal bounces against a full environment.
  *
- * So this samples the environment cubemap directly instead:
+ * So this samples the environment cubemap directly instead, and it is weighted
+ * heavily toward *reflection*. That weighting is the whole trick, and it was
+ * arrived at by bisecting the two terms on screen:
  *
- *   - refract the view ray into the stone, once per colour channel at slightly
- *     different IOR, which is where the rainbow "fire" comes from;
- *   - bounce it once off the pavilion, which is what turns light back toward
- *     the viewer and gives a brilliant cut its brilliance;
- *   - mix that against a Fresnel-weighted mirror reflection of the same
- *     environment, which supplies the hard white glints on the crown.
+ *   - the mirror term alone reads as a diamond: crisp facets, hard bright and
+ *     dark neighbours, real scintillation;
+ *   - the refracted term alone is low-contrast mush, because approximating
+ *     internal bounces scatters directions so widely that adjacent facets land
+ *     on similar averages of the environment.
  *
- * Because the sampled direction swings hard as a facet turns, neighbouring
- * facets land on very different parts of the environment — that difference is
- * what the eye reads as a diamond rather than as glass.
+ * Schlick's f0 for diamond is only 0.17, so mixing by raw Fresnel handed that
+ * mush 83% of the image — which is exactly what "looks like milk" was. Physics
+ * agrees with the fix: a brilliant cut returns most of the light that enters it
+ * by total internal reflection off the pavilion, and what finally leaves through
+ * the crown behaves far more like a mirror of the surroundings than like a
+ * single refracted ray. Refraction's real job here is colour, not brightness —
+ * it carries the dispersion that makes a diamond throw fire rather than just
+ * glitter.
  */
 import * as THREE from "three";
 
@@ -50,42 +56,28 @@ uniform float envIntensity;
 uniform vec3 iorRGB;
 uniform vec3 tint;
 uniform float pavilion;
-uniform float reflectivity;
+uniform float internalReflection;
 uniform float brightness;
-uniform float debugMode;
 
 varying vec3 vWorldPosition;
 varying vec3 vWorldNormal;
 
 /**
- * Direction the light arrives from, for one channel: into the stone, one bounce
- * off the far side, then out into the environment.
+ * Direction light arrives from for one channel: into the stone, bounced off the
+ * pavilion, back out. Per-channel IOR is what separates the colours.
  */
 vec3 gemDirection( vec3 incident, vec3 normal, float ior ) {
   vec3 dir = refract( incident, normal, 1.0 / ior );
 
-  // Two internal bounces, not one. A single bounce leaves the exit direction
-  // close to a linear function of the facet normal, so every facet samples a
-  // similar patch of environment and the crown reads as flat blocks of tone.
-  // The second bounce roughly squares that sensitivity: a degree of facet tilt
-  // now swings the sample far across the environment, which is what separates
-  // neighbouring facets into distinct flashes.
   vec3 pavilionNormal = normalize( normal - dir * pavilion );
   dir = reflect( dir, pavilionNormal );
 
   vec3 secondNormal = normalize( -normal + dir * pavilion );
   dir = reflect( dir, secondNormal );
 
-  // Light return. In a real brilliant cut the pavilion is angled so that total
-  // internal reflection throws light back out through the crown, toward the
-  // viewer — that is why a diamond appears lit from inside rather than simply
-  // transparent.
-  //
-  // The two bounces above do not guarantee it: for a facet square to the camera
-  // they very nearly cancel, leaving the ray pointing back along -normal, into
-  // whatever sits *behind* the stone. With a studio lit from the front that is
-  // the dark side of the room, and the gem renders near black. Folding the ray
-  // back into the outward hemisphere is what the pavilion is actually for.
+  // Keep the exit ray in the outward hemisphere. Left alone, the two bounces
+  // above can cancel for a facet square to the camera and send the ray back
+  // into whatever sits behind the stone.
   if ( dot( dir, normal ) < 0.0 ) dir = reflect( dir, normal );
 
   return dir;
@@ -97,27 +89,26 @@ void main() {
   // Two-sided: back facets are visible through the front ones.
   if ( ! gl_FrontFacing ) normal = -normal;
 
-  // Dispersion: one refraction per channel.
+  // Dispersion: one refraction per channel. This is the fire.
   vec3 refracted;
   refracted.r = textureCube( envMap, gemDirection( incident, normal, iorRGB.r ) ).r;
   refracted.g = textureCube( envMap, gemDirection( incident, normal, iorRGB.g ) ).g;
   refracted.b = textureCube( envMap, gemDirection( incident, normal, iorRGB.b ) ).b;
 
+  // Mirror of the surroundings. This is the brilliance, and it carries the image.
   vec3 reflected = textureCube( envMap, reflect( incident, normal ) ).rgb;
 
-  // Schlick. Diamond's high IOR gives it a strong edge reflection, which is why
-  // the girdle and crown facets read as bright outlines.
   float cosTheta = clamp( dot( -incident, normal ), 0.0, 1.0 );
-  float f0 = pow( ( iorRGB.g - 1.0 ) / ( iorRGB.g + 1.0 ), 2.0 ) * reflectivity;
+  float f0 = pow( ( iorRGB.g - 1.0 ) / ( iorRGB.g + 1.0 ), 2.0 );
   float fresnel = f0 + ( 1.0 - f0 ) * pow( 1.0 - cosTheta, 5.0 );
 
-  vec3 color = mix( refracted * tint, reflected, fresnel ) * envIntensity * brightness;
+  // Floor the reflection weight at `internalReflection` rather than letting raw
+  // Fresnel decide. f0 for diamond is 0.17, and a 17% mirror against an 83%
+  // scattered refraction averages out to flat milk. Total internal reflection
+  // is what actually dominates a brilliant cut, and this is where it enters.
+  float mirror = mix( internalReflection, 1.0, fresnel );
 
-  // TEMP DEBUG bisect
-  if ( debugMode > 0.5 && debugMode < 1.5 ) color = reflected * envIntensity;        // mirror only
-  else if ( debugMode > 1.5 && debugMode < 2.5 ) color = refracted * envIntensity;   // refraction only
-  else if ( debugMode > 2.5 && debugMode < 3.5 ) color = normal * 0.5 + 0.5;         // world normal
-  else if ( debugMode > 3.5 ) color = vec3( gl_FrontFacing ? 1.0 : 0.0, 0.0, gl_FrontFacing ? 0.0 : 1.0 );
+  vec3 color = mix( refracted * tint, reflected, mirror ) * envIntensity * brightness;
 
   gl_FragColor = vec4( color, 1.0 );
 
@@ -132,16 +123,32 @@ export interface GemOptions {
   envIntensity?: number;
   /** How far the internal bounce tilts with the ray. Higher scatters more. */
   pavilion?: number;
-  /** Scales the Fresnel reflection against the refracted core. */
-  reflectivity?: number;
-  /** Final gain, for pulling melee back from blowing out. */
+  /**
+   * Baseline share of the mirror term, before Fresnel adds more at grazing
+   * angles. This is the contrast dial: lower lets the scattered refraction
+   * dominate and the stone goes milky.
+   */
+  internalReflection?: number;
+  /** Final gain. */
   brightness?: number;
   /** Body colour. White for diamond. */
   tint?: THREE.ColorRepresentation;
 }
 
 export function createGemMaterial(options: GemOptions): THREE.ShaderMaterial {
-  const material = new THREE.ShaderMaterial({
+  return new THREE.ShaderMaterial({
     vertexShader,
     fragmentShader,
-    // Back facets must show through the front ones or the stone lo
+    // Back facets must show through the front ones or the stone looks solid.
+    side: THREE.DoubleSide,
+    uniforms: {
+      envMap: { value: options.envMap },
+      envIntensity: { value: options.envIntensity ?? 1 },
+      iorRGB: { value: IOR_RGB.clone() },
+      tint: { value: new THREE.Color(options.tint ?? 0xffffff) },
+      pavilion: { value: options.pavilion ?? 0.45 },
+      internalReflection: { value: options.internalReflection ?? 0.78 },
+      brightness: { value: options.brightness ?? 1 },
+    },
+  });
+}
