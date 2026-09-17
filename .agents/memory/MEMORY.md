@@ -1,0 +1,1 @@
+- [Vercel and Origem GLBs](vercel-glb-constraints.md) — external models need anonymous CORS and early Meshopt decoder setup.
