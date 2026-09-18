@@ -10,8 +10,13 @@ import { OrbitControls } from "three/examples/jsm/controls/OrbitControls.js";
 import { EffectComposer } from "three/examples/jsm/postprocessing/EffectComposer.js";
 import { RenderPass } from "three/examples/jsm/postprocessing/RenderPass.js";
 import { UnrealBloomPass } from "three/examples/jsm/postprocessing/UnrealBloomPass.js";
+import { GTAOPass } from "three/examples/jsm/postprocessing/GTAOPass.js";
 import { OutputPass } from "three/examples/jsm/postprocessing/OutputPass.js";
-import { loadEnvironmentTextures, type EnvironmentTextures } from "./studioEnvironment";
+import {
+  buildMetalEnvironment,
+  loadEnvironmentTextures,
+  type EnvironmentTextures,
+} from "./studioEnvironment";
 import type { Metal, ViewName } from "@/types/ring";
 import { applyMetalColor, createMetal, MATERIAL_TUNING } from "./ringMaterials";
 import { createGemMaterial } from "./GemMaterial";
@@ -95,6 +100,25 @@ const ACCENT_CAPTURE_SIZE = 128;
  * non-zero because the reference does bloom — switching it off entirely
  * overshoots to 41.8 and the flashes lose their glint.
  */
+/**
+ * Ambient occlusion.
+ *
+ * The single biggest thing separating this from a photograph was that nothing
+ * was darker for being buried. Image-based lighting alone gives every surface
+ * the full environment, so the gaps between pavé stones, the undersides of the
+ * prongs and the seam where the shank meets the head were all lit exactly as
+ * brightly as the open top of the band. Real jewellery has deep contact
+ * darkening in all of those places, and without it the parts read as floating
+ * next to each other rather than set into one another.
+ *
+ * The radius is in world units, and the ring is normalised to 2 of them across,
+ * so this is roughly the width of the gap between two melee stones.
+ */
+const AO_RADIUS = 0.055;
+const AO_SCALE = 1.1;
+const AO_THICKNESS = 0.35;
+const AO_SAMPLES = 16;
+
 const BLOOM_STRENGTH = 0.15;
 const BLOOM_RADIUS = 0.5;
 const BLOOM_THRESHOLD = 1;
@@ -110,6 +134,9 @@ export class RingRenderer {
   private readonly resizeObserver: ResizeObserver;
   private readonly composer: EffectComposer;
   private readonly bloomPass: UnrealBloomPass;
+  private readonly aoPass: GTAOPass;
+  /** Owned by this renderer (the raw HDRIs are shared and not disposed here). */
+  private readonly metalEnvironment: THREE.Texture;
 
   private readonly metalMaterials: THREE.MeshPhysicalMaterial[] = [];
   private readonly liveMaterials: THREE.Material[] = [];
@@ -166,7 +193,10 @@ export class RingRenderer {
     // Image-based lighting does all the work here: the metal integrates the
     // prefiltered studio capture through three's PBR shader, and each stone
     // traces rays against the gem capture through its own.
-    this.scene.environment = environment.metal;
+    this.metalEnvironment = buildMetalEnvironment(this.renderer, environment.metal);
+    // Also on the scene, so anything added later without its own envMap is lit.
+    // The metal materials carry it explicitly — see createMetal for why.
+    this.scene.environment = this.metalEnvironment;
     this.scene.add(this.ring);
 
     this.controls = new OrbitControls(this.camera, this.renderer.domElement);
@@ -187,6 +217,17 @@ export class RingRenderer {
       new THREE.WebGLRenderTarget(1, 1, { type: THREE.HalfFloatType, samples: 4 }),
     );
     this.composer.addPass(new RenderPass(this.scene, this.camera));
+    // Before bloom: occlusion is a property of the scene, and letting glow
+    // spill into a crevice we just darkened would undo the point of it.
+    this.aoPass = new GTAOPass(this.scene, this.camera, 1, 1);
+    this.aoPass.updateGtaoMaterial({
+      radius: AO_RADIUS,
+      scale: AO_SCALE,
+      thickness: AO_THICKNESS,
+      samples: AO_SAMPLES,
+      screenSpaceRadius: false,
+    });
+    this.composer.addPass(this.aoPass);
     // Threshold 1 on purpose: only what is brighter than white blooms, which on
     // this scene is exactly the facet flashes and the specular on the prongs.
     this.bloomPass = new UnrealBloomPass(
@@ -220,6 +261,7 @@ export class RingRenderer {
     this.renderer.setSize(width, height, false);
     this.composer.setSize(width, height);
     this.bloomPass.setSize(width, height);
+    this.aoPass.setSize(width, height);
 
     this.applyCameraPreset(true);
   }
@@ -244,7 +286,7 @@ export class RingRenderer {
       const role = part.role;
       for (const piece of entry.pieces) {
         if (role === "metal") {
-          const material = createMetal(this.metal, envIntensity);
+          const material = createMetal(this.metal, envIntensity, this.metalEnvironment);
           this.liveMaterials.push(material);
           this.metalMaterials.push(material);
           const mesh = new THREE.Mesh(piece.geometry, material);
@@ -407,9 +449,12 @@ export class RingRenderer {
     this.controls.dispose();
     this.clearRing();
     this.bloomPass.dispose();
+    this.aoPass.dispose();
     this.composer.dispose();
-    // The environment textures are shared across viewers and cached for the
-    // life of the page, so they are deliberately not disposed here.
+    // The raw HDRIs are shared across viewers and cached for the life of the
+    // page, so they are deliberately not disposed here. The prefiltered metal
+    // environment is built per renderer, so it is.
+    this.metalEnvironment.dispose();
     this.renderer.dispose();
     this.renderer.domElement.remove();
   }

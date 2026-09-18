@@ -55,16 +55,26 @@ export const MATERIAL_TUNING = {
    * clip: gold pushed past white loses its hue with the highlight and the
    * whole ring reads as pale cream.
    *
-   * The HDRI is a real capture and already carries the range this needs.
+   * It is above 1 now only to put back what the black flags in
+   * studioEnvironment.ts take away — they buy the metal its contrast by
+   * subtracting light, which drops the shank's mean from 201 to 140. This
+   * returns it to 155 without touching the contrast they bought.
+   *
+   * Note this value does nothing unless the material owns its `envMap`; see
+   * the note in createMetalMaterial.
    */
-  metalEnvIntensity: 1,
+  metalEnvIntensity: 1.3,
 };
 
 export function metalColor(metal: Metal): THREE.Color {
   return new THREE.Color(METAL_PRESETS[metal].color);
 }
 
-function createMetalMaterial(metal: Metal, envMapIntensity: number): THREE.MeshPhysicalMaterial {
+function createMetalMaterial(
+  metal: Metal,
+  envMapIntensity: number,
+  envMap: THREE.Texture | null,
+): THREE.MeshPhysicalMaterial {
   const preset = METAL_PRESETS[metal];
   return new THREE.MeshPhysicalMaterial({
     color: new THREE.Color(preset.color),
@@ -72,6 +82,19 @@ function createMetalMaterial(metal: Metal, envMapIntensity: number): THREE.MeshP
     roughness: preset.roughness,
     clearcoat: preset.clearcoat,
     clearcoatRoughness: preset.clearcoatRoughness,
+    /**
+     * Assigned per material, not left to `scene.environment`, and that is not
+     * a style choice — three only honours `material.envMapIntensity` when the
+     * material owns its `envMap`:
+     *
+     *   if ( material.envMap ) uniforms.envMapIntensity.value = material.envMapIntensity;
+     *
+     * Relying on `scene.environment` instead routes through
+     * `scene.environmentIntensity` and silently ignores the material's value,
+     * so the gain below is inert. This is presumably why the reference assigns
+     * the HDRI straight onto the material too.
+     */
+    envMap,
     envMapIntensity,
     // The reference ships every metal double-sided. The band is an open shape
     // and the viewer can orbit to where its inner wall faces the camera, so back
@@ -80,8 +103,12 @@ function createMetalMaterial(metal: Metal, envMapIntensity: number): THREE.MeshP
   });
 }
 
-export function createMetal(metal: Metal, envMapIntensity: number): THREE.MeshPhysicalMaterial {
-  return createMetalMaterial(metal, envMapIntensity);
+export function createMetal(
+  metal: Metal,
+  envMapIntensity: number,
+  envMap: THREE.Texture | null,
+): THREE.MeshPhysicalMaterial {
+  return createMetalMaterial(metal, envMapIntensity, envMap);
 }
 
 /**
