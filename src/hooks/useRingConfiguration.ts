@@ -6,9 +6,7 @@ import { getRingAssets } from "@/api/snapshotAssets";
 import { buildRingName } from "@/utils/buildRingName";
 
 export function useRingConfiguration() {
-  const [configuration, setConfigurationState] = useState<RingConfiguration>(
-    DEFAULT_CONFIGURATION,
-  );
+  const [configuration, setConfigurationState] = useState<RingConfiguration>(DEFAULT_CONFIGURATION);
   const [isInitialized, setIsInitialized] = useState(false);
 
   // Read URL params after hydration only.

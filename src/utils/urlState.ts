@@ -15,14 +15,7 @@ const PARAM_MAP: Record<keyof RingConfiguration, string> = {
 };
 
 const ALLOWED: Record<string, string[]> = {
-  ringStyle: [
-    "classic-straight",
-    "cathedral-straight",
-    "twist",
-    "split",
-    "two-row-split",
-    "pinch",
-  ],
+  ringStyle: ["classic-straight", "cathedral-straight", "twist", "split", "two-row-split", "pinch"],
   sideSetting: ["plain-gold", "pave", "prong", "channel"],
   crownSetting: ["classic", "hidden-halo", "single-halo"],
   diamondShape: [

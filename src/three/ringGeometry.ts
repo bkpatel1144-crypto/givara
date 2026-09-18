@@ -1,12 +1,21 @@
 /**
  * GLB loading, geometry flattening and caching for the ring viewer.
  *
- * The pave GLBs are pathological: `Shank_*_Band_diamond.glb` is 10,633 separate
- * mesh primitives describing only 14,798 triangles, and the halo file is 3,472
- * primitives for 4,832 triangles. Drawn as authored that is ~14,100 draw calls
- * to put ~20k triangles on screen, which is what makes the viewer crawl. Every
- * primitive in a file shares one material, so we bake each file down to a
- * single merged BufferGeometry — 14,100 draw calls become 5 for a whole ring.
+ * Two different jobs, decided by the part's role:
+ *
+ * **Metal** is merged as hard as possible. `Shank_*_Band.glb` is one mesh of up
+ * to ~1M triangles, and the accent files are pathological — 10,633 separate
+ * primitives describing 14,798 triangles. Every primitive in a file shares one
+ * material, so baking each file down to a single BufferGeometry turns ~14,100
+ * draw calls into one.
+ *
+ * **Stones** are merged only *within* each stone. The gem shader traces rays
+ * against a cubemap baked from one stone's own surface, around that stone's own
+ * centre, so a band of 20 melee cannot share a geometry: fused into one blob
+ * they would share one bounding sphere and one centre, every trace would
+ * intersect the wrong hull, and the whole rail would render as grey sludge. So
+ * the 4,340 primitives of a pavé band come back as 20 geometries of 217 — one
+ * per stone, 20 draw calls, each traceable on its own terms.
  */
 import * as THREE from "three";
 import { GLTFLoader } from "three/examples/jsm/loaders/GLTFLoader.js";
@@ -20,10 +29,10 @@ export interface RingPartSource {
   role: PartRole;
 }
 
-export interface RingPartGeometry {
+export interface RingPartPiece {
   geometry: THREE.BufferGeometry;
   /**
-   * The part's node transform, deliberately kept *off* the geometry.
+   * The piece's node transform, deliberately kept *off* the geometry.
    *
    * The metal GLBs are EXT_meshopt_compression + KHR_mesh_quantization: their
    * positions are an interleaved Uint16Array paired with a node scale of about
@@ -33,6 +42,11 @@ export interface RingPartGeometry {
    * transform rides on the Mesh instead.
    */
   matrix: THREE.Matrix4;
+}
+
+/** One GLB, resolved to everything that should be drawn from it. */
+export interface RingPart {
+  pieces: RingPartPiece[];
 }
 
 /**
@@ -73,14 +87,13 @@ function getLoader(): Promise<GLTFLoader> {
  * The centre-stone GLBs share vertices across facet boundaries and carry
  * averaged normals: measured against the true face normals they are off by up
  * to 70 degrees. Interpolating those across a facet turns a hard cut edge into
- * a smooth gradient, and the stone renders as a rounded white blob no matter
- * what the lighting does — the normals are simply describing a different shape
- * than the triangles do. The pave files do not have this problem (exactly 3
- * vertices per triangle, zero deviation), which is why only the melee showed
- * facets.
+ * a smooth gradient, and the stone renders as a rounded blob no matter what the
+ * lighting does — the normals are simply describing a different shape than the
+ * triangles do.
  *
- * Splitting every triangle and recomputing gives each facet its own flat
- * normal, which is what a cut stone actually has.
+ * This matters twice over now: those normals are also what gets baked into the
+ * trace cubemap, so smoothed normals would describe a smooth stone to the ray
+ * tracer as well, and no facet would ever be found.
  */
 function toFlatShaded(geometry: THREE.BufferGeometry): THREE.BufferGeometry {
   const flat = geometry.index ? geometry.toNonIndexed() : geometry;
@@ -118,11 +131,45 @@ function toFloatAttribute(
   return out;
 }
 
+/** Merge a run of meshes into one geometry, baking each one's world transform. */
+function mergeMeshes(meshes: THREE.Mesh[]): THREE.BufferGeometry | null {
+  const parts = meshes.map((mesh) => {
+    const source = mesh.geometry;
+    const geometry = new THREE.BufferGeometry();
+    const position = source.getAttribute("position");
+    if (position) geometry.setAttribute("position", toFloatAttribute(position));
+    const normal = source.getAttribute("normal");
+    if (normal) geometry.setAttribute("normal", toFloatAttribute(normal));
+    if (source.index) geometry.setIndex(Array.from(source.index.array));
+    if (!normal) geometry.computeVertexNormals();
+    geometry.applyMatrix4(mesh.matrixWorld);
+    return geometry;
+  });
+
+  // mergeGeometries refuses a mix of indexed and non-indexed input.
+  const allIndexed = parts.every((geometry) => geometry.index !== null);
+  const normalised = allIndexed
+    ? parts
+    : parts.map((geometry) => {
+        if (!geometry.index) return geometry;
+        const expanded = geometry.toNonIndexed();
+        geometry.dispose();
+        return expanded;
+      });
+
+  const merged = mergeGeometries(normalised, false);
+  normalised.forEach((geometry) => geometry.dispose());
+  return merged;
+}
+
 /**
- * Flatten a loaded scene into one geometry plus the transform to draw it with,
- * disposing everything from the source that does not survive into the result.
+ * Flatten a loaded scene into the pieces that should be drawn from it.
+ *
+ * `groupPerParent` is what separates the two jobs described at the top. glTF
+ * gives a multi-primitive mesh as a Group of Mesh children, so grouping by
+ * parent is exactly "one piece per stone".
  */
-function flatten(root: THREE.Object3D): RingPartGeometry | null {
+function flatten(root: THREE.Object3D, groupPerParent: boolean): RingPartPiece[] {
   const meshes: THREE.Mesh[] = [];
   root.updateWorldMatrix(false, true);
   root.traverse((child) => {
@@ -139,63 +186,49 @@ function flatten(root: THREE.Object3D): RingPartGeometry | null {
   });
 
   const first = meshes[0];
-  if (!first) return null;
+  if (!first) return [];
 
-  // Fast path. The metal files are a single mesh of up to ~1M triangles held in
-  // interleaved, quantised buffers. Adopt the geometry untouched and hand the
-  // node transform back to the caller: no clone, no de-interleaving, and no
-  // chance of truncating a uint16 attribute.
+  // Fast path. A single-mesh file (every metal part, and the centre stone)
+  // needs no merge at all: adopt the geometry untouched and hand the node
+  // transform back to the caller. No clone, no de-interleaving, and no chance
+  // of truncating a uint16 attribute.
   if (meshes.length === 1) {
     const geometry = first.geometry;
     stripToPositionNormal(geometry);
     if (!geometry.getAttribute("normal")) geometry.computeVertexNormals();
-    return { geometry, matrix: first.matrixWorld.clone() };
+    return [{ geometry, matrix: first.matrixWorld.clone() }];
   }
 
-  // Merge path: thousands of small primitives, each with its own node transform,
-  // so the transforms have to be baked. Convert to float first for the reason
-  // above, which also guarantees the uniform layout mergeGeometries demands.
-  const parts = meshes.map((mesh) => {
-    const source = mesh.geometry;
-    const geometry = new THREE.BufferGeometry();
-    const position = source.getAttribute("position");
-    if (position) geometry.setAttribute("position", toFloatAttribute(position));
-    const normal = source.getAttribute("normal");
-    if (normal) geometry.setAttribute("normal", toFloatAttribute(normal));
-    if (source.index) geometry.setIndex(Array.from(source.index.array));
-    if (!normal) geometry.computeVertexNormals();
-    geometry.applyMatrix4(mesh.matrixWorld);
-    return geometry;
-  });
+  const groups = new Map<string, THREE.Mesh[]>();
+  for (const mesh of meshes) {
+    // One bucket per stone when grouping, one bucket for everything otherwise.
+    const key = groupPerParent ? (mesh.parent?.uuid ?? mesh.uuid) : "all";
+    const bucket = groups.get(key);
+    if (bucket) bucket.push(mesh);
+    else groups.set(key, [mesh]);
+  }
+
+  const pieces: RingPartPiece[] = [];
+  for (const bucket of groups.values()) {
+    const merged = mergeMeshes(bucket);
+    // Transforms are baked by mergeMeshes, so the piece draws at identity.
+    if (merged) pieces.push({ geometry: merged, matrix: new THREE.Matrix4() });
+  }
   meshes.forEach((mesh) => mesh.geometry.dispose());
-
-  // mergeGeometries refuses a mix of indexed and non-indexed input.
-  const allIndexed = parts.every((geometry) => geometry.index !== null);
-  const normalised = allIndexed
-    ? parts
-    : parts.map((geometry) => {
-        if (!geometry.index) return geometry;
-        const expanded = geometry.toNonIndexed();
-        geometry.dispose();
-        return expanded;
-      });
-
-  const merged = mergeGeometries(normalised, false);
-  normalised.forEach((geometry) => geometry.dispose());
-  return { geometry: merged, matrix: new THREE.Matrix4() };
+  return pieces;
 }
 
-const cache = new Map<string, RingPartGeometry>();
-const inFlight = new Map<string, Promise<RingPartGeometry>>();
+const cache = new Map<string, RingPart>();
+const inFlight = new Map<string, Promise<RingPart>>();
 
 /**
- * Load one GLB and return its merged geometry.
+ * Load one GLB and return its drawable pieces.
  *
  * Results are cached by URL, which matters more than it looks: changing metal
  * touches no geometry at all, and changing ring style reuses the head files.
  * Concurrent requests for the same URL share one parse.
  */
-export async function loadPartGeometry(url: string, role: PartRole): Promise<RingPartGeometry> {
+export async function loadPartGeometry(url: string, role: PartRole): Promise<RingPart> {
   // Keyed by url alone: a given file is always loaded into the same role.
   const cached = cache.get(url);
   if (cached) {
@@ -211,12 +244,16 @@ export async function loadPartGeometry(url: string, role: PartRole): Promise<Rin
   const request = (async () => {
     const loader = await getLoader();
     const gltf = await loader.loadAsync(url);
-    const part = flatten(gltf.scene);
-    if (!part) throw new Error(`No drawable geometry in ${url}`);
+    const isStone = role !== "metal";
+    const pieces = flatten(gltf.scene, isStone);
+    if (pieces.length === 0) throw new Error(`No drawable geometry in ${url}`);
     // Only the stones. Metal is a smooth surface whose averaged normals are
     // correct, and flattening a million triangles of band would both cost
     // memory and turn a polished curve into a faceted one.
-    if (role !== "metal") part.geometry = toFlatShaded(part.geometry);
+    if (isStone) {
+      for (const piece of pieces) piece.geometry = toFlatShaded(piece.geometry);
+    }
+    const part: RingPart = { pieces };
     cache.set(url, part);
     return part;
   })();
@@ -242,13 +279,20 @@ export function pruneGeometryCache(keep: Iterable<string>): void {
   for (const [url, part] of cache) {
     if (cache.size <= CACHE_LIMIT) break;
     if (pinned.has(url)) continue;
-    part.geometry.dispose();
+    part.pieces.forEach((piece) => piece.geometry.dispose());
     cache.delete(url);
   }
 }
 
+/** Every geometry uuid currently held, so dependent caches can prune in step. */
+export function cachedGeometryIds(): Set<string> {
+  const ids = new Set<string>();
+  cache.forEach((part) => part.pieces.forEach((piece) => ids.add(piece.geometry.uuid)));
+  return ids;
+}
+
 /** Drop every cached geometry. Used when the viewer is torn down for good. */
 export function clearGeometryCache(): void {
-  cache.forEach((part) => part.geometry.dispose());
+  cache.forEach((part) => part.pieces.forEach((piece) => piece.geometry.dispose()));
   cache.clear();
 }

@@ -39,9 +39,7 @@ export const METAL_KARATS: Option<MetalKarat>[] = [
 ];
 
 /** Ring sizes accepted by the reference application. */
-export const RING_SIZES: string[] = Array.from({ length: 19 }, (_, i) =>
-  String(i + 6),
-);
+export const RING_SIZES: string[] = Array.from({ length: 19 }, (_, i) => String(i + 6));
 
 export const MAX_ENGRAVING_LENGTH = 18;
 

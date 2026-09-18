@@ -7,10 +7,21 @@
  */
 import * as THREE from "three";
 import { OrbitControls } from "three/examples/jsm/controls/OrbitControls.js";
-import { createEnvironmentTextures } from "./studioEnvironment";
+import { EffectComposer } from "three/examples/jsm/postprocessing/EffectComposer.js";
+import { RenderPass } from "three/examples/jsm/postprocessing/RenderPass.js";
+import { UnrealBloomPass } from "three/examples/jsm/postprocessing/UnrealBloomPass.js";
+import { OutputPass } from "three/examples/jsm/postprocessing/OutputPass.js";
+import { loadEnvironmentTextures, type EnvironmentTextures } from "./studioEnvironment";
 import type { Metal, ViewName } from "@/types/ring";
-import { applyMetalColor, createMaterial } from "./ringMaterials";
-import { loadPartGeometry, pruneGeometryCache, type RingPartSource } from "./ringGeometry";
+import { applyMetalColor, createMetal, MATERIAL_TUNING } from "./ringMaterials";
+import { createGemMaterial } from "./GemMaterial";
+import { captureNormals, pruneNormalCaptures } from "./diamondNormalCapture";
+import {
+  cachedGeometryIds,
+  loadPartGeometry,
+  pruneGeometryCache,
+  type RingPartSource,
+} from "./ringGeometry";
 
 export type ViewerMode = "360" | "engraving" | ViewName;
 
@@ -34,34 +45,16 @@ const CAMERA_PRESETS: Record<ViewerMode, { azimuth: number; polar: number; zoom:
   engraving: { azimuth: 90, polar: 72, zoom: 0.62 },
 };
 
-const BACKDROP_DISTANCE = 12;
-
-/** Studio sweep matching the CSS .viewer-stage gradient. */
-function createBackdropTexture(): THREE.Texture {
-  const size = 512;
-  const canvas = document.createElement("canvas");
-  canvas.width = size;
-  canvas.height = size;
-  const ctx = canvas.getContext("2d");
-  if (ctx) {
-    const gradient = ctx.createRadialGradient(
-      size * 0.51,
-      size * 0.47,
-      0,
-      size * 0.51,
-      size * 0.47,
-      size * 0.72,
-    );
-    gradient.addColorStop(0, "#fffdf9");
-    gradient.addColorStop(0.48, "#f7f3eb");
-    gradient.addColorStop(1, "#e9e2d6");
-    ctx.fillStyle = gradient;
-    ctx.fillRect(0, 0, size, size);
-  }
-  const texture = new THREE.CanvasTexture(canvas);
-  texture.colorSpace = THREE.SRGBColorSpace;
-  return texture;
-}
+/**
+ * Cube resolution for the trace map baked off each stone.
+ *
+ * The centre stone is the hero and fills a good part of the frame, so it gets a
+ * full capture. Melee is half a millimetre across and covers a few pixels; at
+ * 128 a pavé rail of 20 stones costs ~16 MB of VRAM instead of ~250 MB, and at
+ * that size on screen nothing is lost.
+ */
+const CENTER_CAPTURE_SIZE = 512;
+const ACCENT_CAPTURE_SIZE = 128;
 
 export class RingRenderer {
   private readonly container: HTMLElement;
@@ -70,13 +63,15 @@ export class RingRenderer {
   private readonly camera: THREE.PerspectiveCamera;
   private readonly controls: OrbitControls;
   private readonly ring = new THREE.Group();
-  private readonly backdrop: THREE.Mesh<THREE.PlaneGeometry, THREE.MeshBasicMaterial>;
-  private readonly environment: THREE.Texture;
-  private readonly gemEnvironment: THREE.CubeTexture;
+  private readonly environment: EnvironmentTextures;
   private readonly resizeObserver: ResizeObserver;
+  private readonly composer: EffectComposer;
+  private readonly bloomPass: UnrealBloomPass;
 
   private readonly metalMaterials: THREE.MeshPhysicalMaterial[] = [];
   private readonly liveMaterials: THREE.Material[] = [];
+  /** Stone meshes whose trace uniforms track their world matrix. */
+  private readonly gemMeshes: THREE.Mesh<THREE.BufferGeometry, THREE.ShaderMaterial>[] = [];
 
   private metal: Metal;
   private mode: ViewerMode = "360";
@@ -90,9 +85,20 @@ export class RingRenderer {
   /** Bumped on every setParts call so a superseded load can bail out. */
   private generation = 0;
 
-  constructor(container: HTMLElement, metal: Metal) {
+  /**
+   * The environment maps are fetched, so construction is async. Everything
+   * downstream depends on them — the metal cannot be lit and a stone cannot be
+   * traced without one — so there is no useful partially-built state.
+   */
+  static async create(container: HTMLElement, metal: Metal): Promise<RingRenderer> {
+    const environment = await loadEnvironmentTextures();
+    return new RingRenderer(container, metal, environment);
+  }
+
+  private constructor(container: HTMLElement, metal: Metal, environment: EnvironmentTextures) {
     this.container = container;
     this.metal = metal;
+    this.environment = environment;
 
     this.renderer = new THREE.WebGLRenderer({
       antialias: true,
@@ -102,45 +108,22 @@ export class RingRenderer {
     this.renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
     this.renderer.setClearAlpha(0);
     this.renderer.outputColorSpace = THREE.SRGBColorSpace;
-    // Khronos PBR Neutral, not ACES. ACES is a film curve: it desaturates as it
-    // rolls off, so a bright gold highlight slides toward white and the whole
-    // band reads as pale cream. PBR Neutral was designed for product viewing and
-    // holds hue into the highlights, which is what keeps gold looking like gold.
-    this.renderer.toneMapping = THREE.NeutralToneMapping;
+    // ACES, applied once at the end of the chain by OutputPass. The gem shader
+    // deliberately returns values well above 1 — a facet catching a light source
+    // is genuinely brighter than white — and a film curve is what turns that
+    // range into highlights instead of flat clipped patches.
+    this.renderer.toneMapping = THREE.ACESFilmicToneMapping;
     this.renderer.toneMappingExposure = 1;
-    // The transmission buffer is a full extra scene render. Half resolution is
-    // invisible through a refracting stone and roughly halves its cost.
-    this.renderer.transmissionResolutionScale = 0.5;
     this.renderer.domElement.className = "glb-model";
     container.appendChild(this.renderer.domElement);
 
     this.camera = new THREE.PerspectiveCamera(30, 1, 0.1, 100);
     this.camera.position.set(0, 0, 6);
 
-    // Image-based lighting does all the work here: the metal samples the
-    // prefiltered map through three's PBR shader, the stones sample the sharp
-    // cubemap through their own.
-    const environment = createEnvironmentTextures(this.renderer);
-    this.environment = environment.pbr;
-    this.gemEnvironment = environment.gem;
-    this.scene.environment = this.environment;
-
-    this.backdrop = new THREE.Mesh(
-      new THREE.PlaneGeometry(1, 1),
-      new THREE.MeshBasicMaterial({
-        map: createBackdropTexture(),
-        // Not tone mapped, so it lands on exactly the CSS gradient colours.
-        toneMapped: false,
-        depthWrite: false,
-      }),
-    );
-    this.backdrop.position.set(0, 0, -BACKDROP_DISTANCE);
-    this.backdrop.renderOrder = -1;
-    // Parented to the camera so it always fills frame, and inside the scene so
-    // the transmission pass includes it — without a backdrop to refract, the
-    // diamonds sample empty space and read as dark grey glass.
-    this.camera.add(this.backdrop);
-    this.scene.add(this.camera);
+    // Image-based lighting does all the work here: the metal integrates the
+    // prefiltered studio capture through three's PBR shader, and each stone
+    // traces rays against the gem capture through its own.
+    this.scene.environment = environment.metal;
     this.scene.add(this.ring);
 
     this.controls = new OrbitControls(this.camera, this.renderer.domElement);
@@ -154,21 +137,22 @@ export class RingRenderer {
       this.settlingCamera = false;
     });
 
+    // Half-float, so the stones' above-white output survives to the bloom pass
+    // instead of clipping on the way in.
+    this.composer = new EffectComposer(
+      this.renderer,
+      new THREE.WebGLRenderTarget(1, 1, { type: THREE.HalfFloatType, samples: 4 }),
+    );
+    this.composer.addPass(new RenderPass(this.scene, this.camera));
+    // Threshold 1 on purpose: only what is brighter than white blooms, which on
+    // this scene is exactly the facet flashes and the specular on the prongs.
+    this.bloomPass = new UnrealBloomPass(new THREE.Vector2(1, 1), 0.5, 0.5, 1);
+    this.composer.addPass(this.bloomPass);
+    this.composer.addPass(new OutputPass());
+
     this.resizeObserver = new ResizeObserver(() => this.resize());
     this.resizeObserver.observe(container);
     this.resize();
-
-    // TEMP DEBUG (?debugEnv=1): show the raw gem cubemap. The backdrop plane is
-    // parented to the camera and covers the whole frustum, so it must be hidden
-    // or it hides scene.background entirely.
-    if (typeof location !== "undefined" && location.search.includes("debugEnv=1")) {
-      this.backdrop.visible = false;
-      this.ring.visible = false;
-      this.scene.background = this.gemEnvironment;
-      this.scene.backgroundIntensity = Number(
-        new URLSearchParams(location.search).get("envGain") ?? "1",
-      );
-    }
 
     this.animationHandle = requestAnimationFrame(this.tick);
   }
@@ -181,11 +165,8 @@ export class RingRenderer {
     this.camera.aspect = width / height;
     this.camera.updateProjectionMatrix();
     this.renderer.setSize(width, height, false);
-
-    // Keep the backdrop exactly covering the frustum at its fixed depth.
-    const vFov = THREE.MathUtils.degToRad(this.camera.fov);
-    const backdropHeight = 2 * Math.tan(vFov / 2) * BACKDROP_DISTANCE;
-    this.backdrop.scale.set(backdropHeight * this.camera.aspect, backdropHeight, 1);
+    this.composer.setSize(width, height);
+    this.bloomPass.setSize(width, height);
 
     this.applyCameraPreset(true);
   }
@@ -201,18 +182,33 @@ export class RingRenderer {
 
     this.clearRing();
 
+    const envIntensity = MATERIAL_TUNING.metalEnvIntensity;
+
     const group = new THREE.Group();
     parts.forEach((part, index) => {
       const entry = loaded[index];
       if (!entry) return;
-      const material = createMaterial(part.role, this.metal, this.gemEnvironment);
-      this.liveMaterials.push(material);
-      if (material instanceof THREE.MeshPhysicalMaterial) this.metalMaterials.push(material);
-      const mesh = new THREE.Mesh(entry.geometry, material);
-      // The node transform lives here rather than in the attribute buffers; see
-      // RingPartGeometry for why baking it would destroy the quantised metal.
-      mesh.applyMatrix4(entry.matrix);
-      group.add(mesh);
+      const role = part.role;
+      for (const piece of entry.pieces) {
+        if (role === "metal") {
+          const material = createMetal(this.metal, envIntensity);
+          this.liveMaterials.push(material);
+          this.metalMaterials.push(material);
+          const mesh = new THREE.Mesh(piece.geometry, material);
+          // The node transform lives here rather than in the attribute buffers;
+          // see RingPartPiece for why baking it would destroy the quantised metal.
+          mesh.applyMatrix4(piece.matrix);
+          group.add(mesh);
+          continue;
+        }
+
+        const material = createGemMaterial(role, this.environment.gem);
+        this.liveMaterials.push(material);
+        const mesh = new THREE.Mesh(piece.geometry, material);
+        mesh.applyMatrix4(piece.matrix);
+        this.prepareGem(mesh, role);
+        group.add(mesh);
+      }
     });
 
     // Normalise: recentre on the union bounds and scale to MODEL_SIZE. Done on
@@ -228,8 +224,46 @@ export class RingRenderer {
     this.ring.add(group);
     this.frameRadius = (bounds.getBoundingSphere(new THREE.Sphere()).radius || 1) * scale;
 
+    // The trace runs in each stone's own space, so every gem needs the matrix
+    // that gets it there — and that is only final once the group above has been
+    // placed and scaled.
+    this.scene.updateMatrixWorld(true);
+    this.syncGemMatrices();
+
     pruneGeometryCache(parts.map((part) => part.url));
+    pruneNormalCaptures(cachedGeometryIds());
     this.applyCameraPreset(true);
+  }
+
+  /**
+   * Bake this stone's surface into its trace cubemap and point the material at
+   * it. A failed capture is not fatal: the stone still draws, using whatever
+   * the shader's fallback direction returns.
+   */
+  private prepareGem(
+    mesh: THREE.Mesh<THREE.BufferGeometry, THREE.ShaderMaterial>,
+    role: "centerStone" | "accentStone",
+  ): void {
+    const size = role === "centerStone" ? CENTER_CAPTURE_SIZE : ACCENT_CAPTURE_SIZE;
+    try {
+      const capture = captureNormals(this.renderer, mesh.geometry, size);
+      const uniforms = mesh.material.uniforms;
+      uniforms["tCubeMapNormals"]!.value = capture.texture;
+      uniforms["radius"]!.value = capture.radius;
+      (uniforms["centerOffset"]!.value as THREE.Vector3).copy(capture.centerOffset);
+      this.gemMeshes.push(mesh);
+    } catch (error) {
+      console.warn("Diamond normal capture failed", error);
+    }
+  }
+
+  /** Push each stone's world matrix (and its inverse) into its trace uniforms. */
+  private syncGemMatrices(): void {
+    for (const mesh of this.gemMeshes) {
+      const uniforms = mesh.material.uniforms;
+      (uniforms["modelOffsetMatrix"]!.value as THREE.Matrix4).copy(mesh.matrixWorld);
+      (uniforms["modelOffsetMatrixInv"]!.value as THREE.Matrix4).copy(mesh.matrixWorld).invert();
+    }
   }
 
   /** Dispose meshes and materials, but not geometry — that belongs to the cache. */
@@ -238,6 +272,7 @@ export class RingRenderer {
     this.liveMaterials.forEach((material) => material.dispose());
     this.liveMaterials.length = 0;
     this.metalMaterials.length = 0;
+    this.gemMeshes.length = 0;
   }
 
   setMetal(metal: Metal): void {
@@ -308,7 +343,7 @@ export class RingRenderer {
     this.controls.autoRotate =
       this.mode === "360" && !this.userHasInteracted && !this.settlingCamera;
     this.controls.update();
-    this.renderer.render(this.scene, this.camera);
+    this.composer.render();
   };
 
   dispose(): void {
@@ -318,11 +353,10 @@ export class RingRenderer {
     this.resizeObserver.disconnect();
     this.controls.dispose();
     this.clearRing();
-    this.backdrop.geometry.dispose();
-    this.backdrop.material.map?.dispose();
-    this.backdrop.material.dispose();
-    this.environment.dispose();
-    this.gemEnvironment.dispose();
+    this.bloomPass.dispose();
+    this.composer.dispose();
+    // The environment textures are shared across viewers and cached for the
+    // life of the page, so they are deliberately not disposed here.
     this.renderer.dispose();
     this.renderer.domElement.remove();
   }

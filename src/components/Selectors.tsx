@@ -169,9 +169,7 @@ export function MetalKaratAndSize({ configuration, set }: Props) {
           className="field-select"
           data-testid="metal-karat"
           value={configuration.metalKarat}
-          onChange={(e) =>
-            set({ metalKarat: e.target.value as RingConfiguration["metalKarat"] })
-          }
+          onChange={(e) => set({ metalKarat: e.target.value as RingConfiguration["metalKarat"] })}
         >
           {METAL_KARATS.map((k) => (
             <option key={k.value} value={k.value}>

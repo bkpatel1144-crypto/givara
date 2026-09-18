@@ -12,119 +12,87 @@
  * That distinction is the whole ballgame: the previous name-sniffing pass
  * ("does the name contain diamond/stone/gem") missed `DIA-RNDHD-B1-1` and so
  * painted the centre diamond solid gold.
+ *
+ * The metal values below are the reference builder's, lifted verbatim. They had
+ * been guessed at before from measured linear reflectance, which is defensible
+ * physics and still looked wrong, because the look of polished jewellery is not
+ * albedo — it is the clearcoat on white gold, the exact roughness, and an
+ * environment gain well above 1.
  */
 import * as THREE from "three";
 import type { Metal } from "@/types/ring";
-import { createGemMaterial } from "./GemMaterial";
 
 /** Which material a loaded GLB should be given. */
 export type PartRole = "metal" | "centerStone" | "accentStone";
 
-/**
- * Linear-space albedo for polished precious metals. These are measured
- * reflectance values rather than sRGB swatches, so they are fed through
- * `setRGB(..., LinearSRGBColorSpace)` instead of a hex literal — passing them
- * as hex would apply an sRGB decode and wash the metals out.
- */
-const METAL_ALBEDO: Record<Metal, readonly [number, number, number]> = {
-  "White Gold": [0.962, 0.949, 0.922],
-  "Yellow Gold": [1.0, 0.766, 0.336],
-  "Rose Gold": [0.955, 0.638, 0.538],
+interface MetalPreset {
+  /** sRGB hex, converted on the way into THREE.Color. */
+  color: number;
+  roughness: number;
+  /**
+   * White gold is rhodium plated, and that plating is a genuine dielectric
+   * layer over the metal — not a stylistic choice. It is what gives the white
+   * band its hard, wet-looking highlight.
+   */
+  clearcoat: number;
+  clearcoatRoughness: number;
+}
+
+const METAL_PRESETS: Record<Metal, MetalPreset> = {
+  "White Gold": { color: 0xc8c8c8, roughness: 0.12, clearcoat: 1, clearcoatRoughness: 0.15 },
+  "Yellow Gold": { color: 0xdab072, roughness: 0.15, clearcoat: 0, clearcoatRoughness: 0.15 },
+  "Rose Gold": { color: 0xeaaa80, roughness: 0.08, clearcoat: 0, clearcoatRoughness: 0.15 },
 };
 
-/** Tuning knobs, grouped so they are easy to find and adjust by eye. */
 export const MATERIAL_TUNING = {
   /**
-   * Polished gold is very smooth, but a perfect mirror reads as chrome. A
-   * little roughness keeps the highlight rolling along the band.
-   */
-  metalRoughness: 0.14,
-  /**
-   * Kept near 1. Pushing environment gain on a metal drives its highlights
-   * past white, and once they clip the hue goes with them — which is what
-   * makes yellow gold render as pale cream.
-   */
-  metalEnvIntensity: 1.05,
-
-  /**
-   * `envIntensity` is small on purpose, and it is the single most important
-   * number here.
+   * Environment gain for the metal. Unit gain, deliberately.
    *
-   * The studio panels sit at 8-14 and the hot accents at 30-78 — values chosen
-   * so the *metal* has headroom, since three's PBR path prefilters the
-   * environment and integrates it against a BRDF, which averages those down.
-   * The gem shader has no such averaging: it samples the sharp cubemap and
-   * returns the value. At a gain of 1 every facet that catches any panel comes
-   * back at 8 or more, tone maps to pure white, and the whole stone clips to a
-   * flat blob — which is exactly what "looks like milk" was.
+   * The reference threads a `metalEnvIntensity` of 1.8 down through its model
+   * component, which is tempting to copy — but follow it and it is never
+   * applied to anything: the material is built with the preset's own
+   * `envMapIntensity`, which is 1. The 1.8 is dead. Using it makes the band
+   * clip: gold pushed past white loses its hue with the highlight and the
+   * whole ring reads as pale cream.
    *
-   * At this gain the range lands where it should: the dark room maps to ~0.03
-   * (near-black facets), the panels to ~0.5-1.0 (bright facets), and the hot
-   * accents to 4+ (deliberately blown-out sparkle points).
+   * The HDRI is a real capture and already carries the range this needs.
    */
-  centerGem: {
-    // Matched to the melee below, which renders correctly under this same
-    // shader and cubemap. A higher `pavilion` scatters the internal bounce
-    // further off-axis, and on the large centre stone that was steering most
-    // facets into the dark side of the rig while the melee stayed bright.
-    envIntensity: 0.16,
-    pavilion: 0.3,
-    reflectivity: 1,
-    brightness: 1,
-  },
-  /**
-   * Melee is half a millimetre across; each stone covers a few pixels. Damping
-   * the scatter keeps a pave rail from boiling into noise as the ring turns.
-   */
-  accentGem: {
-    // A shade hotter than the centre: melee covers a few pixels each, so it
-    // needs to punch to register at all.
-    envIntensity: 0.16,
-    pavilion: 0.3,
-    reflectivity: 1,
-    brightness: 1,
-  },
+  metalEnvIntensity: 1,
 };
 
 export function metalColor(metal: Metal): THREE.Color {
-  const [r, g, b] = METAL_ALBEDO[metal];
-  return new THREE.Color().setRGB(r, g, b, THREE.LinearSRGBColorSpace);
+  return new THREE.Color(METAL_PRESETS[metal].color);
 }
 
-function createMetalMaterial(metal: Metal): THREE.MeshPhysicalMaterial {
+function createMetalMaterial(metal: Metal, envMapIntensity: number): THREE.MeshPhysicalMaterial {
+  const preset = METAL_PRESETS[metal];
   return new THREE.MeshPhysicalMaterial({
-    color: metalColor(metal),
+    color: new THREE.Color(preset.color),
     metalness: 1,
-    roughness: MATERIAL_TUNING.metalRoughness,
-    envMapIntensity: MATERIAL_TUNING.metalEnvIntensity,
+    roughness: preset.roughness,
+    clearcoat: preset.clearcoat,
+    clearcoatRoughness: preset.clearcoatRoughness,
+    envMapIntensity,
+    // The band is an open shape and the camera goes inside it on the engraving
+    // view, so back faces have to draw.
+    side: THREE.DoubleSide,
   });
 }
 
-/**
- * @param gemEnvMap Sharp environment cubemap for the gem shader. Stones do not
- * use three's `transmission`: it refracts the framebuffer, and behind these
- * stones is a flat backdrop, so it can only ever produce flat milk. See
- * GemMaterial.ts.
- */
-export function createMaterial(
-  role: PartRole,
-  metal: Metal,
-  gemEnvMap: THREE.CubeTexture,
-): THREE.Material {
-  switch (role) {
-    case "metal":
-      return createMetalMaterial(metal);
-    case "centerStone":
-      return createGemMaterial({ envMap: gemEnvMap, ...MATERIAL_TUNING.centerGem });
-    case "accentStone":
-      return createGemMaterial({ envMap: gemEnvMap, ...MATERIAL_TUNING.accentGem });
-  }
+export function createMetal(metal: Metal, envMapIntensity: number): THREE.MeshPhysicalMaterial {
+  return createMetalMaterial(metal, envMapIntensity);
 }
 
 /**
  * Recolour in place. Changing metal must not rebuild geometry or materials —
- * it is the cheapest control in the UI and should feel instant.
+ * it is the cheapest control in the UI and should feel instant. Roughness and
+ * clearcoat differ per metal too, so they move with the colour.
  */
 export function applyMetalColor(material: THREE.MeshPhysicalMaterial, metal: Metal): void {
-  material.color.copy(metalColor(metal));
+  const preset = METAL_PRESETS[metal];
+  material.color.set(preset.color);
+  material.roughness = preset.roughness;
+  material.clearcoat = preset.clearcoat;
+  material.clearcoatRoughness = preset.clearcoatRoughness;
+  material.needsUpdate = true;
 }

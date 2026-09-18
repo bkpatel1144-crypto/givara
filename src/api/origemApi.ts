@@ -9,11 +9,7 @@
  * See docs/public-api-map.md for the full inventory (and for the endpoints
  * that are NOT browser-accessible and therefore intentionally unused).
  */
-import type {
-  CalculatePriceRequest,
-  CalculatePriceResponse,
-  PriceData,
-} from "@/types/pricing";
+import type { CalculatePriceRequest, CalculatePriceResponse, PriceData } from "@/types/pricing";
 import type { RingConfiguration } from "@/types/ring";
 
 export const ORIGEM_BASE = "https://www.ringbuilder.origemindia.com";

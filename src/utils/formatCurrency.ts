@@ -4,5 +4,7 @@ export function formatINR(value: number | null | undefined): string {
 }
 
 export function formatDecimal(value: number, digits = 3): string {
-  return Number(value).toFixed(digits).replace(/\.?0+$/, "");
+  return Number(value)
+    .toFixed(digits)
+    .replace(/\.?0+$/, "");
 }

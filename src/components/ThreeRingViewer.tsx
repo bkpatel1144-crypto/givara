@@ -62,7 +62,14 @@ export function ThreeRingViewer({
       try {
         const { RingRenderer } = await import("@/three/RingRenderer");
         if (cancelled) return;
-        rendererRef.current = new RingRenderer(container, metal);
+        // Async: the HDRI environments have to be fetched before anything can
+        // be lit or traced.
+        const renderer = await RingRenderer.create(container, metal);
+        if (cancelled) {
+          renderer.dispose();
+          return;
+        }
+        rendererRef.current = renderer;
       } catch (error) {
         // No WebGL, a lost context, or a chunk that failed to load. The parent
         // falls back to the CloudFront stills, which is a fine outcome.
