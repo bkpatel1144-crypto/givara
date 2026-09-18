@@ -34,10 +34,33 @@ export type ViewerMode = "360" | "engraving" | ViewName;
  */
 const MODEL_SIZE = 2;
 
-/** Camera framing per UI mode: azimuth/polar in degrees, plus a zoom multiplier. */
+/**
+ * Vertical field of view, in degrees.
+ *
+ * 40, matching the reference, and it is a framing decision rather than a
+ * cosmetic one. At the 30 this used to run, the ring sat far enough back that
+ * perspective was nearly flat: the band read as large as the stone, the stone
+ * covered few enough pixels that antialiasing averaged its thin dark facet
+ * lines away, and the diamond measured markedly brighter and flatter than the
+ * reference for no reason to do with its material.
+ */
+const CAMERA_FOV = 40;
+
+/**
+ * Camera framing per UI mode: azimuth/polar in degrees, plus a zoom multiplier.
+ *
+ * The hero angle is the reference builder's own. It ships a camera at
+ * (-0.563, 3.664, 1.1) looking at the origin, which is azimuth -27.1 degrees
+ * and polar 18.6 — looking down at the stone from above and slightly in front,
+ * so the table faces the viewer and the band falls away foreshortened.
+ *
+ * The 1.3 zoom belongs to that angle alone. Foreshortened, the ring leaves room
+ * to move in; the square-on views do not, and they clip the stone and the
+ * bottom of the band if given the same treatment.
+ */
 const CAMERA_PRESETS: Record<ViewerMode, { azimuth: number; polar: number; zoom: number }> = {
-  "360": { azimuth: 35, polar: 72, zoom: 1 },
-  angle: { azimuth: 35, polar: 72, zoom: 1 },
+  "360": { azimuth: -27.1, polar: 18.64, zoom: 1.3 },
+  angle: { azimuth: -27.1, polar: 18.64, zoom: 1.3 },
   front: { azimuth: 0, polar: 72, zoom: 1 },
   side: { azimuth: 90, polar: 72, zoom: 1 },
   top: { azimuth: 0, polar: 18, zoom: 1 },
@@ -55,6 +78,28 @@ const CAMERA_PRESETS: Record<ViewerMode, { azimuth: number; polar: number; zoom:
  */
 const CENTER_CAPTURE_SIZE = 512;
 const ACCENT_CAPTURE_SIZE = 128;
+
+/**
+ * Bloom, kept deliberately small and confined to the finest mip.
+ *
+ * The reference blooms at intensity 0.5 but over only *two* mip levels.
+ * `UnrealBloomPass` always builds five and offers no way to ask for fewer, so
+ * copying the 0.5 across all five spreads glow several times wider than the
+ * reference ever does. Measured against the reference stone, that cost the
+ * diamond its cut: facet-to-facet contrast fell from 38 to 24 standard
+ * deviations of luminance, and the share of genuinely dark facets collapsed
+ * from 17.6% to 0.9%. Every dark facet in a brilliant sits next to a bright
+ * one, so a wide glow fills all of them in and the stone reads as a shiny lump
+ * rather than a cut gem.
+ *
+ * The coarse mips are silenced by tinting them black, and the strength is
+ * dropped to suit: that measures 38.6 against the reference's 38.0. It stays
+ * non-zero because the reference does bloom — switching it off entirely
+ * overshoots to 41.8 and the flashes lose their glint.
+ */
+const BLOOM_STRENGTH = 0.15;
+const BLOOM_RADIUS = 0.5;
+const BLOOM_THRESHOLD = 1;
 
 export class RingRenderer {
   private readonly container: HTMLElement;
@@ -117,7 +162,7 @@ export class RingRenderer {
     this.renderer.domElement.className = "glb-model";
     container.appendChild(this.renderer.domElement);
 
-    this.camera = new THREE.PerspectiveCamera(30, 1, 0.1, 100);
+    this.camera = new THREE.PerspectiveCamera(CAMERA_FOV, 1, 0.1, 100);
     this.camera.position.set(0, 0, 6);
 
     // Image-based lighting does all the work here: the metal integrates the
@@ -146,7 +191,17 @@ export class RingRenderer {
     this.composer.addPass(new RenderPass(this.scene, this.camera));
     // Threshold 1 on purpose: only what is brighter than white blooms, which on
     // this scene is exactly the facet flashes and the specular on the prongs.
-    this.bloomPass = new UnrealBloomPass(new THREE.Vector2(1, 1), 0.5, 0.5, 1);
+    this.bloomPass = new UnrealBloomPass(
+      new THREE.Vector2(1, 1),
+      BLOOM_STRENGTH,
+      BLOOM_RADIUS,
+      BLOOM_THRESHOLD,
+    );
+    // Silence every mip but the finest. See BLOOM_STRENGTH.
+    this.bloomPass.bloomTintColors = this.bloomPass.bloomTintColors.map(
+      (_: THREE.Vector3, index: number) =>
+        index === 0 ? new THREE.Vector3(1, 1, 1) : new THREE.Vector3(0, 0, 0),
+    );
     this.composer.addPass(this.bloomPass);
     this.composer.addPass(new OutputPass());
 
