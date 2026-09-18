@@ -3,7 +3,7 @@ import type { Metal, RingModelAssets, SnapshotViews, ViewName } from "@/types/ri
 import { ThreeRingViewer } from "./ThreeRingViewer";
 import { Rotate360Icon } from "./RingIcons";
 
-export type ViewerMode = "360" | "engraving" | ViewName;
+export type ViewerMode = "360" | ViewName;
 
 const FRAME_ORDER: ViewName[] = ["front", "angle", "side", "top"];
 
@@ -11,14 +11,12 @@ export function RingViewer({
   views,
   models,
   mode,
-  engravingText,
   metal,
   onModeChange,
 }: {
   views: SnapshotViews;
   models: RingModelAssets;
   mode: ViewerMode;
-  engravingText: string;
   metal: Metal;
   onModeChange: (m: ViewerMode) => void;
 }) {
@@ -41,7 +39,6 @@ export function RingViewer({
       const view = FRAME_ORDER[frame % FRAME_ORDER.length] ?? "front";
       return views[view];
     }
-    if (mode === "engraving") return views.side;
     return views[mode];
   }, [mode, frame, views]);
 
@@ -122,15 +119,6 @@ export function RingViewer({
           <Rotate360Icon size={28} />
           <p>Preview unavailable for this combination.</p>
           <span>Configuration and pricing remain fully usable.</span>
-        </div>
-      )}
-
-      {mode === "engraving" && (
-        <div className="engraving-overlay">
-          <div className="engraving-band">
-            <span>{engravingText || "Your engraving"}</span>
-          </div>
-          <p className="engraving-caption">Engraving Preview</p>
         </div>
       )}
 

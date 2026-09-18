@@ -41,8 +41,6 @@ export const METAL_KARATS: Option<MetalKarat>[] = [
 /** Ring sizes accepted by the reference application. */
 export const RING_SIZES: string[] = Array.from({ length: 19 }, (_, i) => String(i + 6));
 
-export const MAX_ENGRAVING_LENGTH = 18;
-
 export const DEFAULT_CONFIGURATION: RingConfiguration = {
   diamondShape: "oval",
   centerDiamondSize: "1",
@@ -52,7 +50,6 @@ export const DEFAULT_CONFIGURATION: RingConfiguration = {
   metal: "White Gold",
   metalKarat: "14kt",
   ringSize: "7",
-  engravingText: "",
 };
 
 export const WHATSAPP_NUMBER = "918000000000";

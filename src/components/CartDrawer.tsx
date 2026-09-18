@@ -43,9 +43,6 @@ export function CartDrawer({
                         .map(([k, v]) => `${k}: ${v}`)
                         .join(" · ")}
                     </p>
-                    {item.engravingText && (
-                      <p className="drawer-meta">Engraving: “{item.engravingText}”</p>
-                    )}
                     <p className="drawer-price">{formatINR(item.totalPrice)}</p>
                   </div>
                   <button type="button" onClick={() => onRemove(item.id)} aria-label="Remove item">

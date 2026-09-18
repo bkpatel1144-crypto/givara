@@ -2,7 +2,6 @@ import { CARAT_STEPS, DIAMOND_SHAPES } from "@/data/diamondOptions";
 import { METALS } from "@/data/metalOptions";
 import {
   CROWN_SETTINGS,
-  MAX_ENGRAVING_LENGTH,
   METAL_KARATS,
   RING_SIZES,
   RING_STYLES,
@@ -192,27 +191,6 @@ export function MetalKaratAndSize({ configuration, set }: Props) {
             </option>
           ))}
         </select>
-      </div>
-    </section>
-  );
-}
-
-export function EngravingInput({ configuration, set }: Props) {
-  return (
-    <section>
-      <SectionLabel>Engraving Text</SectionLabel>
-      <div className="engraving-field">
-        <input
-          type="text"
-          data-testid="engraving-input"
-          placeholder="ENTER TEXT"
-          maxLength={MAX_ENGRAVING_LENGTH}
-          value={configuration.engravingText}
-          onChange={(e) => set({ engravingText: e.target.value.slice(0, MAX_ENGRAVING_LENGTH) })}
-        />
-        <span className="engraving-count">
-          {configuration.engravingText.length}/{MAX_ENGRAVING_LENGTH}
-        </span>
       </div>
     </section>
   );

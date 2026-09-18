@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import type { Metal, RingModelAssets, ViewName } from "@/types/ring";
 
-export type ViewerMode = "360" | "engraving" | ViewName;
+export type ViewerMode = "360" | ViewName;
 
 /**
  * React shell around the three.js scene in src/three/RingRenderer.ts.

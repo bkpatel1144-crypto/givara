@@ -31,7 +31,6 @@ export interface RingConfiguration {
   metal: Metal;
   metalKarat: MetalKarat;
   ringSize: string;
-  engravingText: string;
 }
 
 export type ViewName = "front" | "side" | "top" | "angle";
@@ -59,7 +58,6 @@ export interface CartItem {
   title: string;
   configuration: RingConfiguration;
   selections: Record<string, string>;
-  engravingText: string;
   totalPrice: number | null;
   priceBreakup: unknown;
   assets: SnapshotViews;

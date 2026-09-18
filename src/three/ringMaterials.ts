@@ -73,8 +73,9 @@ function createMetalMaterial(metal: Metal, envMapIntensity: number): THREE.MeshP
     clearcoat: preset.clearcoat,
     clearcoatRoughness: preset.clearcoatRoughness,
     envMapIntensity,
-    // The band is an open shape and the camera goes inside it on the engraving
-    // view, so back faces have to draw.
+    // The reference ships every metal double-sided. The band is an open shape
+    // and the viewer can orbit to where its inner wall faces the camera, so back
+    // faces have to draw.
     side: THREE.DoubleSide,
   });
 }

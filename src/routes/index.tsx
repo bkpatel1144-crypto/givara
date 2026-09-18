@@ -8,7 +8,6 @@ import {
   CrownSettingSelector,
   DiamondShapeSelector,
   DiamondSizeSlider,
-  EngravingInput,
   MetalKaratAndSize,
   MetalSelector,
   RingStyleSelector,
@@ -24,7 +23,7 @@ import { RING_STYLES, SIDE_SETTINGS, CROWN_SETTINGS } from "@/data/ringOptions";
 
 const TITLE = "Custom Ring Studio | Givara Jewelry";
 const DESCRIPTION =
-  "Design your own engagement ring with Givara Jewelry: choose shape, carat, setting, metal and engraving with live pricing and a 360° preview.";
+  "Design your own engagement ring with Givara Jewelry: choose shape, carat, setting and metal with live pricing and a 360° preview.";
 
 export const Route = createFileRoute("/")({
   head: () => ({
@@ -95,7 +94,6 @@ function RingBuilderPage() {
               views={assets.views}
               models={assets.models}
               mode={mode}
-              engravingText={configuration.engravingText}
               metal={configuration.metal}
               onModeChange={setMode}
             />
@@ -104,12 +102,7 @@ function RingBuilderPage() {
               <span>Real-time 3D</span>
               <span>Made to order</span>
             </div>
-            <RingThumbnails
-              views={assets.views}
-              mode={mode}
-              onSelect={setMode}
-              showEngraving={configuration.engravingText.length > 0}
-            />
+            <RingThumbnails views={assets.views} mode={mode} onSelect={setMode} />
           </div>
         </section>
 
@@ -152,7 +145,6 @@ function RingBuilderPage() {
               <CrownSettingSelector {...props} />
               <MetalSelector {...props} />
               <MetalKaratAndSize {...props} />
-              <EngravingInput {...props} />
             </div>
           </div>
         </section>

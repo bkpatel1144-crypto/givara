@@ -23,7 +23,7 @@ import {
   type RingPartSource,
 } from "./ringGeometry";
 
-export type ViewerMode = "360" | "engraving" | ViewName;
+export type ViewerMode = "360" | ViewName;
 
 /**
  * Every ring is rescaled so its largest dimension is exactly this many world
@@ -64,8 +64,6 @@ const CAMERA_PRESETS: Record<ViewerMode, { azimuth: number; polar: number; zoom:
   front: { azimuth: 0, polar: 72, zoom: 1 },
   side: { azimuth: 90, polar: 72, zoom: 1 },
   top: { azimuth: 0, polar: 18, zoom: 1 },
-  // The engraving sits on the inner face of the band, so move in close.
-  engraving: { azimuth: 90, polar: 72, zoom: 0.62 },
 };
 
 /**

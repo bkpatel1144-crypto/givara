@@ -8,12 +8,10 @@ export function RingThumbnails({
   views,
   mode,
   onSelect,
-  showEngraving,
 }: {
   views: SnapshotViews;
   mode: ViewerMode;
   onSelect: (m: ViewerMode) => void;
-  showEngraving: boolean;
 }) {
   return (
     <div className="thumb-rail" data-testid="preview-strip">
@@ -29,20 +27,6 @@ export function RingThumbnails({
           view
         </span>
       </button>
-
-      {showEngraving && (
-        <button
-          type="button"
-          onClick={() => onSelect("engraving")}
-          className={`thumb thumb--label ${mode === "engraving" ? "thumb--selected" : ""}`}
-        >
-          <span>
-            Engraving
-            <br />
-            Preview
-          </span>
-        </button>
-      )}
 
       {VIEWS.map((v) => (
         <button

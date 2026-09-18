@@ -332,33 +332,6 @@
   color: var(--muted-foreground);
 }
 
-.engraving-overlay {
-  position: absolute;
-  inset: auto 0 12% 0;
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  gap: 0.4rem;
-}
-
-.engraving-band {
-  padding: 0.4rem 1.4rem;
-  border-radius: 999px;
-  background: var(--primary);
-  color: var(--primary-foreground);
-  font-family: var(--font-display);
-  letter-spacing: 0.18em;
-  text-transform: uppercase;
-  font-size: 0.95rem;
-}
-
-.engraving-caption {
-  font-size: 0.68rem;
-  letter-spacing: 0.2em;
-  text-transform: uppercase;
-  color: var(--muted-foreground);
-}
-
 .thumb-rail {
   display: flex;
   gap: 0.6rem;
@@ -570,33 +543,6 @@
   background: var(--card);
   color: var(--foreground);
   font-size: 0.9rem;
-}
-
-.engraving-field {
-  display: flex;
-  align-items: center;
-  gap: 0.5rem;
-  padding: 0.15rem 0.8rem;
-  border-radius: var(--radius-md);
-  border: 1px solid var(--input);
-  background: var(--card);
-}
-
-.engraving-field input {
-  flex: 1;
-  border: none;
-  outline: none;
-  background: transparent;
-  padding: 0.6rem 0;
-  font-size: 0.9rem;
-  letter-spacing: 0.12em;
-  text-transform: uppercase;
-  color: var(--foreground);
-}
-
-.engraving-count {
-  font-size: 0.7rem;
-  color: var(--muted-foreground);
 }
 
 /* ----------------------------------------------------------------- price */

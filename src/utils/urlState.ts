@@ -11,7 +11,6 @@ const PARAM_MAP: Record<keyof RingConfiguration, string> = {
   centerDiamondSize: "center_diamond_size",
   ringSize: "ring_size",
   ringStyle: "ring_style",
-  engravingText: "engraving_text",
 };
 
 const ALLOWED: Record<string, string[]> = {
@@ -43,10 +42,6 @@ export function parseConfigFromUrl(search: string): Partial<RingConfiguration> {
     const raw = params.get(param);
     if (!raw) continue;
     const value = decodeURIComponent(raw).trim();
-    if (key === "engravingText") {
-      out[key] = value.slice(0, 18);
-      continue;
-    }
     const allowed = ALLOWED[key];
     if (!allowed) continue;
     const exact = allowed.find((a) => a.toLowerCase() === value.toLowerCase());
