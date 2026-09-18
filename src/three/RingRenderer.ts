@@ -9,7 +9,6 @@ import * as THREE from "three";
 import { OrbitControls } from "three/examples/jsm/controls/OrbitControls.js";
 import { EffectComposer } from "three/examples/jsm/postprocessing/EffectComposer.js";
 import { RenderPass } from "three/examples/jsm/postprocessing/RenderPass.js";
-import { UnrealBloomPass } from "three/examples/jsm/postprocessing/UnrealBloomPass.js";
 import { GTAOPass } from "three/examples/jsm/postprocessing/GTAOPass.js";
 import { OutputPass } from "three/examples/jsm/postprocessing/OutputPass.js";
 import {
@@ -83,33 +82,14 @@ const CENTER_CAPTURE_SIZE = 512;
 const ACCENT_CAPTURE_SIZE = 128;
 
 /**
- * Bloom, kept deliberately small and confined to the finest mip.
- *
- * The reference blooms at intensity 0.5 but over only *two* mip levels.
- * `UnrealBloomPass` always builds five and offers no way to ask for fewer, so
- * copying the 0.5 across all five spreads glow several times wider than the
- * reference ever does. Measured against the reference stone, that cost the
- * diamond its cut: facet-to-facet contrast fell from 38 to 24 standard
- * deviations of luminance, and the share of genuinely dark facets collapsed
- * from 17.6% to 0.9%. Every dark facet in a brilliant sits next to a bright
- * one, so a wide glow fills all of them in and the stone reads as a shiny lump
- * rather than a cut gem.
- *
- * The coarse mips are silenced by tinting them black, and the strength is
- * dropped to suit: that measures 38.6 against the reference's 38.0. It stays
- * non-zero because the reference does bloom — switching it off entirely
- * overshoots to 41.8 and the flashes lose their glint.
- */
-/**
  * Ambient occlusion.
  *
- * The single biggest thing separating this from a photograph was that nothing
- * was darker for being buried. Image-based lighting alone gives every surface
- * the full environment, so the gaps between pavé stones, the undersides of the
- * prongs and the seam where the shank meets the head were all lit exactly as
- * brightly as the open top of the band. Real jewellery has deep contact
- * darkening in all of those places, and without it the parts read as floating
- * next to each other rather than set into one another.
+ * Without it nothing was darker for being buried: image-based lighting alone
+ * gives every surface the full environment, so the gaps between pavé stones,
+ * the undersides of the prongs and the seam where the shank meets the head
+ * were lit exactly as brightly as the open top of the band. Real jewellery has
+ * deep contact darkening in all of those places, and without it the parts read
+ * as floating next to each other rather than set into one another.
  *
  * The radius is in world units, and the ring is normalised to 2 of them across,
  * so this is roughly the width of the gap between two melee stones.
@@ -119,9 +99,21 @@ const AO_SCALE = 1.1;
 const AO_THICKNESS = 0.35;
 const AO_SAMPLES = 16;
 
-const BLOOM_STRENGTH = 0;
-const BLOOM_RADIUS = 0.5;
-const BLOOM_THRESHOLD = 1;
+/**
+ * There is deliberately no bloom pass.
+ *
+ * One was tried, tuned and removed. Glow spreading off the brightest pixels is
+ * what a bloom does, and against this ivory stage that spill landed on the
+ * background as a visible white aura hugging the diamond, the prongs and the
+ * pavé — most obvious on a phone, where the ring is large in frame and the
+ * halo covers a real fraction of it. It reads as a lighting artefact rather
+ * than as sparkle.
+ *
+ * Nothing is lost by dropping it: measured against the reference stone, no
+ * bloom gives facet contrast of 41.8 standard deviations of luminance where
+ * the reference sits at 38.0, so the cut reads slightly *crisper* without it.
+ * The composer stays for ambient occlusion and the ACES pass.
+ */
 
 export class RingRenderer {
   private readonly container: HTMLElement;
@@ -133,7 +125,6 @@ export class RingRenderer {
   private readonly environment: EnvironmentTextures;
   private readonly resizeObserver: ResizeObserver;
   private readonly composer: EffectComposer;
-  private readonly bloomPass: UnrealBloomPass;
   private readonly aoPass: GTAOPass;
   /** Owned by this renderer (the raw HDRIs are shared and not disposed here). */
   private readonly metalEnvironment: THREE.Texture;
@@ -210,15 +201,13 @@ export class RingRenderer {
       this.settlingCamera = false;
     });
 
-    // Half-float, so the stones' above-white output survives to the bloom pass
-    // instead of clipping on the way in.
+    // Half-float, so the stones' above-white output survives to the tone
+    // mapping pass instead of clipping on the way in.
     this.composer = new EffectComposer(
       this.renderer,
       new THREE.WebGLRenderTarget(1, 1, { type: THREE.HalfFloatType, samples: 4 }),
     );
     this.composer.addPass(new RenderPass(this.scene, this.camera));
-    // Before bloom: occlusion is a property of the scene, and letting glow
-    // spill into a crevice we just darkened would undo the point of it.
     this.aoPass = new GTAOPass(this.scene, this.camera, 1, 1);
     this.aoPass.updateGtaoMaterial({
       radius: AO_RADIUS,
@@ -228,20 +217,6 @@ export class RingRenderer {
       screenSpaceRadius: false,
     });
     this.composer.addPass(this.aoPass);
-    // Threshold 1 on purpose: only what is brighter than white blooms, which on
-    // this scene is exactly the facet flashes and the specular on the prongs.
-    this.bloomPass = new UnrealBloomPass(
-      new THREE.Vector2(1, 1),
-      BLOOM_STRENGTH,
-      BLOOM_RADIUS,
-      BLOOM_THRESHOLD,
-    );
-    // Silence every mip but the finest. See BLOOM_STRENGTH.
-    this.bloomPass.bloomTintColors = this.bloomPass.bloomTintColors.map(
-      (_: THREE.Vector3, index: number) =>
-        index === 0 ? new THREE.Vector3(1, 1, 1) : new THREE.Vector3(0, 0, 0),
-    );
-    this.composer.addPass(this.bloomPass);
     this.composer.addPass(new OutputPass());
 
     this.resizeObserver = new ResizeObserver(() => this.resize());
@@ -260,7 +235,6 @@ export class RingRenderer {
     this.camera.updateProjectionMatrix();
     this.renderer.setSize(width, height, false);
     this.composer.setSize(width, height);
-    this.bloomPass.setSize(width, height);
     this.aoPass.setSize(width, height);
 
     this.applyCameraPreset(true);
@@ -448,7 +422,6 @@ export class RingRenderer {
     this.resizeObserver.disconnect();
     this.controls.dispose();
     this.clearRing();
-    this.bloomPass.dispose();
     this.aoPass.dispose();
     this.composer.dispose();
     // The raw HDRIs are shared across viewers and cached for the life of the
