@@ -1,9 +1,11 @@
 import { createFileRoute } from "@tanstack/react-router";
-import { useMemo, useState } from "react";
+import { useCallback, useMemo, useState } from "react";
 import { RingViewer, type ViewerMode } from "@/components/RingViewer";
 import { RingThumbnails } from "@/components/RingThumbnails";
 import { CartDrawer } from "@/components/CartDrawer";
 import { SiteHeader } from "@/components/SiteHeader";
+import { ActionBar } from "@/components/ActionBar";
+import { PriceBreakup } from "@/components/PriceSummary";
 import {
   CrownSettingSelector,
   DiamondShapeSelector,
@@ -16,8 +18,6 @@ import {
 import { useRingConfiguration } from "@/hooks/useRingConfiguration";
 import { usePriceCalculation } from "@/hooks/usePriceCalculation";
 import { useCart } from "@/hooks/useCart";
-import { formatINR } from "@/utils/formatCurrency";
-import { BRAND_NAME } from "@/data/ringOptions";
 import { DIAMOND_SHAPES, CARAT_STEPS } from "@/data/diamondOptions";
 import { RING_STYLES, SIDE_SETTINGS, CROWN_SETTINGS } from "@/data/ringOptions";
 
@@ -40,104 +40,98 @@ export const Route = createFileRoute("/")({
 });
 
 function RingBuilderPage() {
-  const { configuration, setConfiguration, assets, title } = useRingConfiguration();
-  const { price, isLoading, error } = usePriceCalculation(configuration);
-  const { items, removeItem, clear, count } = useCart();
+  const { configuration, assets, setConfiguration, title } = useRingConfiguration();
+  const { price, isLoading, error, retry } = usePriceCalculation(configuration);
+  const { items, addItem, removeItem, clear, count } = useCart();
   const [mode, setMode] = useState<ViewerMode>("360");
   const [cartOpen, setCartOpen] = useState(false);
+  const [breakupOpen, setBreakupOpen] = useState(false);
+  const [added, setAdded] = useState(false);
+
+  const label = useCallback(
+    (list: readonly { value: string; label: string }[], value: string) =>
+      list.find((o) => o.value === value)?.label ?? value,
+    [],
+  );
 
   const selections = useMemo(
     () => ({
-      Shape:
-        DIAMOND_SHAPES.find((s) => s.value === configuration.diamondShape)?.label ??
-        configuration.diamondShape,
-      Carat:
-        CARAT_STEPS.find((c) => c.value === configuration.centerDiamondSize)?.label ??
-        configuration.centerDiamondSize,
-      Style:
-        RING_STYLES.find((s) => s.value === configuration.ringStyle)?.label ??
-        configuration.ringStyle,
-      Side:
-        SIDE_SETTINGS.find((s) => s.value === configuration.sideSetting)?.label ??
-        configuration.sideSetting,
-      Crown:
-        CROWN_SETTINGS.find((s) => s.value === configuration.crownSetting)?.label ??
-        configuration.crownSetting,
+      Shape: label(DIAMOND_SHAPES, configuration.diamondShape),
+      Carat: label(CARAT_STEPS, configuration.centerDiamondSize),
+      Style: label(RING_STYLES, configuration.ringStyle),
+      Side: label(SIDE_SETTINGS, configuration.sideSetting),
+      Crown: label(CROWN_SETTINGS, configuration.crownSetting),
       Metal: `${configuration.metalKarat.toUpperCase()} ${configuration.metal}`,
       Size: configuration.ringSize,
     }),
-    [configuration],
+    [configuration, label],
   );
+
+  const onAddToCart = useCallback(() => {
+    addItem({
+      title,
+      configuration,
+      selections,
+      totalPrice: price?.total ?? null,
+      priceBreakup: price,
+      assets: assets.views,
+    });
+    setAdded(true);
+    setCartOpen(true);
+    window.setTimeout(() => setAdded(false), 2400);
+  }, [addItem, title, configuration, selections, price, assets.views]);
 
   const props = { configuration, set: setConfiguration };
 
   return (
-    <div className="page">
+    <div className="studio">
       <SiteHeader cartCount={count} onOpenCart={() => setCartOpen(true)} />
 
-      <main className="builder">
-        <section className="builder__preview" aria-label="Ring preview">
-          <div className="preview-sticky">
-            <div className="preview-topline">
-              <span>Givara / Bespoke 01</span>
-              <span className="preview-live">
-                <i aria-hidden />
-                Live model
-              </span>
+      <main className="studio__body">
+        <section className="stage" aria-label="Ring preview">
+          <div className="stage__inner">
+            <div className="stage__frame">
+              <RingViewer
+                views={assets.views}
+                models={assets.models}
+                mode={mode}
+                metal={configuration.metal}
+                onModeChange={setMode}
+              />
             </div>
-            <div className="preview-intro">
-              <p className="preview-eyebrow">Designed by you</p>
-              <h2>Made for always.</h2>
-              <p>Shape every detail of a ring that feels entirely your own.</p>
-            </div>
-            <RingViewer
-              views={assets.views}
-              models={assets.models}
-              mode={mode}
-              metal={configuration.metal}
-              onModeChange={setMode}
-            />
-            <div className="preview-trust">
-              <span>01 / 04</span>
-              <span>Real-time 3D</span>
-              <span>Made to order</span>
-            </div>
-            <RingThumbnails views={assets.views} mode={mode} onSelect={setMode} />
+          </div>
+          {/* Sibling of the stage, not a child of it: on desktop this is pinned
+              beside the ring, on mobile it flows underneath. */}
+          <RingThumbnails views={assets.views} mode={mode} onSelect={setMode} />
+          <div className="stage__foot">
+            <span>Real-time 3D</span>
+            <i aria-hidden />
+            <span>Made to order</span>
+            <i aria-hidden />
+            <span>{assets.variantSku}</span>
           </div>
         </section>
 
-        <section className="builder__panel" id="configuration" aria-label="Ring configuration">
-          <div className="panel-content">
-            <div className="builder-progress" aria-label="Design progress">
-              <span className="builder-progress__number">01</span>
-              <span className="builder-progress__line" aria-hidden />
-              <span className="builder-progress__label">Create your ring</span>
-              <span className="builder-progress__count">01 / 07</span>
-            </div>
-            <div className="panel-heading">
-              <p className="panel-kicker">Build your ring</p>
-              <h1 className="ring-title" data-testid="ring-title">
+        <section className="config" id="configuration" aria-label="Ring configuration">
+          <div className="config__scroll">
+            <header className="config__head">
+              <p className="eyebrow">Bespoke · Design your own</p>
+              <h1 className="config__title" data-testid="ring-title">
                 {title}
               </h1>
-              <p className="ring-description">
-                A considered balance of light, proportion and precious metal.
+              <p className="config__sub">
+                A considered balance of light, proportion and precious metal — shaped entirely by
+                you.
               </p>
-              <div className="selection-chips" aria-label="Current selections">
-                <span>{selections.Shape}</span>
-                <span>{selections.Carat}</span>
-                <span>{selections.Metal}</span>
-              </div>
-              <p className="ring-sku">Design reference {assets.variantSku}</p>
-            </div>
-            <div className="live-total" aria-live="polite">
-              <span>Live total</span>
-              <strong>
-                {price ? formatINR(price.total) : isLoading ? "Calculating…" : "Unavailable"}
-              </strong>
-              {error && <span className="live-total__error">Price unavailable</span>}
-            </div>
+              <ul className="spec" aria-label="Current selections">
+                <li>{selections.Shape}</li>
+                <li>{selections.Carat}</li>
+                <li>{selections.Metal}</li>
+                <li>Size {selections.Size}</li>
+              </ul>
+            </header>
 
-            <div className="panel-options">
+            <div className="config__sections">
               <RingStyleSelector {...props} />
               <SideSettingSelector {...props} />
               <DiamondShapeSelector {...props} />
@@ -147,14 +141,44 @@ function RingBuilderPage() {
               <MetalKaratAndSize {...props} />
             </div>
           </div>
+
+          <ActionBar
+            price={price}
+            isLoading={isLoading}
+            error={error}
+            added={added}
+            onOpenBreakup={() => setBreakupOpen(true)}
+            onAddToCart={onAddToCart}
+          />
         </section>
       </main>
 
-      <footer className="site-footer">
-        <p>
-          © {new Date().getFullYear()} {BRAND_NAME}. Handcrafted to order.
-        </p>
-      </footer>
+      {breakupOpen && (
+        <>
+          <button
+            type="button"
+            className="scrim"
+            aria-label="Close price breakup"
+            onClick={() => setBreakupOpen(false)}
+          />
+          <aside className="sheet" role="dialog" aria-label="Price breakup">
+            <div className="sheet__head">
+              <h2>Price breakup</h2>
+              <button
+                type="button"
+                className="sheet__close"
+                onClick={() => setBreakupOpen(false)}
+                aria-label="Close"
+              >
+                ✕
+              </button>
+            </div>
+            <div className="sheet__body">
+              <PriceBreakup price={price} isLoading={isLoading} error={error} onRetry={retry} />
+            </div>
+          </aside>
+        </>
+      )}
 
       <CartDrawer
         open={cartOpen}

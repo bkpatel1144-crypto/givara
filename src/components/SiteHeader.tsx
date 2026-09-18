@@ -11,17 +11,13 @@ export function SiteHeader({
   return (
     <header className="site-header">
       <a href="/" className="brand" aria-label={`${BRAND_NAME} home`}>
-        <img src={logo} alt={`${BRAND_NAME} logo`} width={148} height={40} />
+        <img src={logo} alt={BRAND_NAME} />
       </a>
       <nav className="site-nav" aria-label="Primary">
         <span className="nav-tag">Custom Ring Studio</span>
-        <button
-          type="button"
-          className="btn btn--ghost"
-          onClick={onOpenCart}
-          data-testid="open-cart"
-        >
-          Bag{cartCount > 0 ? ` (${cartCount})` : ""}
+        <button type="button" className="bag-btn" onClick={onOpenCart} data-testid="open-cart">
+          Bag
+          {cartCount > 0 && <span className="bag-count">{cartCount}</span>}
         </button>
       </nav>
     </header>
