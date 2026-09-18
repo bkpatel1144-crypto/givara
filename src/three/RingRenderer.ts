@@ -119,7 +119,7 @@ const AO_SCALE = 1.1;
 const AO_THICKNESS = 0.35;
 const AO_SAMPLES = 16;
 
-const BLOOM_STRENGTH = 0.15;
+const BLOOM_STRENGTH = 0;
 const BLOOM_RADIUS = 0.5;
 const BLOOM_THRESHOLD = 1;
 
